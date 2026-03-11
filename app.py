@@ -1,64 +1,51 @@
-%%writefile app.py
-
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
 
-st.set_page_config(layout='wide')
+st.title("Online Retail Customer Segmentation")
 
-st.title('RFM Customer Segmentation Dashboard')
+# Upload dataset
+uploaded_file = st.file_uploader("Upload Online Retail Dataset")
 
-# Load the RFM data
-@st.cache_data
-def load_data():
-    rfm_df = pd.read_csv('rfm_data.csv', index_col='Customer ID')
-    return rfm_df
+if uploaded_file is not None:
 
-rfm = load_data()
+    df = pd.read_csv(uploaded_file, encoding='latin1')
 
-st.subheader('1. RFM Data Overview')
-st.write(rfm.head())
+    df = df.dropna(subset=['CustomerID'])
+    df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'])
+    df = df[df['Quantity'] > 0]
 
-# Prepare data for clustering and visualization (re-run steps for reproducibility within app)
-scaler = StandardScaler()
-# Select only RFM features for scaling
-rfm_features = rfm[['Recency', 'Frequency', 'Monetary']]
-rfm_scaled = scaler.fit_transform(rfm_features)
+    df['TotalPrice'] = df['Quantity'] * df['UnitPrice']
 
-# Apply KMeans (using the same number of clusters as in analysis)
-kmeans = KMeans(n_clusters=4, random_state=42, n_init='auto')
-rfm['Cluster_KMeans'] = kmeans.fit_predict(rfm_scaled)
+    snapshot_date = df['InvoiceDate'].max() + pd.Timedelta(days=1)
 
-# Reduce dimensions with PCA for visualization
-pca = PCA(n_components=2)
-rfm_pca = pca.fit_transform(rfm_scaled)
-rfm['PC1'] = rfm_pca[:, 0]
-rfm['PC2'] = rfm_pca[:, 1]
+    rfm = df.groupby('CustomerID').agg({
+        'InvoiceDate': lambda x: (snapshot_date - x.max()).days,
+        'InvoiceNo': 'count',
+        'TotalPrice': 'sum'
+    })
 
-st.subheader('2. Customer Clusters (KMeans via PCA)')
-fig, ax = plt.subplots(figsize=(10, 6))
-sns.scatterplot(x='PC1', y='PC2', hue='Cluster_KMeans', data=rfm, palette='viridis', legend='full', ax=ax)
-ax.set_title('Customer Segmentation (KMeans via PCA)')
-ax.set_xlabel('Principal Component 1')
-ax.set_ylabel('Principal Component 2')
-st.pyplot(fig)
+    rfm.columns = ['Recency','Frequency','Monetary']
 
-st.subheader('3. Cluster Characteristics')
-cluster_means = rfm.groupby('Cluster_KMeans')[['Recency', 'Frequency', 'Monetary']].mean().sort_values(by='Monetary', ascending=False)
-st.dataframe(cluster_means)
+    scaler = StandardScaler()
+    rfm_scaled = scaler.fit_transform(rfm)
 
-st.write("**Interpretation of Clusters:**")
-st.write("- **High Value Customers:** Look for clusters with low Recency, high Frequency, and high Monetary values.")
-st.write("- **Losing Customers:** Look for clusters with high Recency, low Frequency, and low Monetary values.")
-st.write("- **New Customers:** Look for clusters with low Recency, but potentially lower Frequency/Monetary.")
-st.write("- **Potential Loyalist:** Customers who have recently purchased, bought often, and spent a good amount.")
+    kmeans = KMeans(n_clusters=4, random_state=42)
+    rfm['Cluster'] = kmeans.fit_predict(rfm_scaled)
 
-selected_cluster = st.selectbox('Select a Cluster to explore:', sorted(rfm['Cluster_KMeans'].unique()))
+    st.write("RFM Table with Clusters")
+    st.dataframe(rfm.head())
 
-if selected_cluster is not None:
-    st.write(f"Details for Cluster {selected_cluster}:")
-    st.dataframe(rfm[rfm['Cluster_KMeans'] == selected_cluster].describe())
+    # PCA visualization
+    pca = PCA(n_components=2)
+    pca_data = pca.fit_transform(rfm_scaled)
+
+    plt.scatter(pca_data[:,0], pca_data[:,1], c=rfm['Cluster'])
+    plt.xlabel("PC1")
+    plt.ylabel("PC2")
+    plt.title("Customer Segmentation")
+    
+    st.pyplot(plt)
